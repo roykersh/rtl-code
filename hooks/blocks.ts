@@ -91,7 +91,7 @@ export function rtlLine(line: string): RtlLine | null {
   else if (m[5]) marker = m[5] + m[6] + ' '
   else if (m[4] !== undefined) marker = m[4] === ' ' ? '☐ ' : '☑ '
   else if (item) marker = '• '
-  return { kind: 'rtl', indent, marker: quote + marker, heading, runs: inlineRuns(content) }
+  return { kind: 'rtl', indent, marker: quote + marker, heading, runs: mirrorRuns(inlineRuns(content)) }
 }
 
 /**
@@ -155,4 +155,89 @@ export function splitBlocks(text: string): Block[] | null {
     k = n - 1
   }
   return out
+}
+
+// ---- mirrored brackets ----
+// The engine orders an RTL row's letters but draws each glyph as stored, so a
+// bracket that resolves right to left shows facing the wrong way: "(0.8.0)"
+// reads ")0.8.0(". The Unicode bidi algorithm mirrors those (rule L4); this
+// does it ahead of the engine, resolving each bracket the way the algorithm
+// would (N0 for a pair, N1/N2 for the rest) in a right-to-left paragraph.
+
+const MIRROR: Record<string, string> = { '(': ')', ')': '(', '[': ']', ']': '[', '{': '}', '}': '{', '<': '>', '>': '<', '«': '»', '»': '«' }
+const OPENERS = '([{'
+const CLOSER_OF: Record<string, string> = { '(': ')', '[': ']', '{': '}' }
+
+/** 'R' for Hebrew and digits (digits count as R when brackets resolve), 'L' for Latin letters. */
+function strong(c: string | undefined): 'R' | 'L' | null {
+  if (c === undefined) return null
+  if (/[\u0590-\u08ff\ufb1d-\ufdff\ufe70-\ufeff0-9]/.test(c)) return 'R'
+  if (/[A-Za-z\u00c0-\u024f]/.test(c)) return 'L'
+  return null
+}
+
+/** The line with every bracket that resolves right to left swapped for its mirror. */
+export function mirrorRtl(s: string): string {
+  if (!/[()[\]{}<>«»]/.test(s)) return s
+  const chars = Array.from(s)
+  const dir: ('R' | 'L' | null)[] = chars.map(strong)
+  const resolved = new Map<number, 'R' | 'L'>()
+  const before = (i: number) => {
+    for (let k = i - 1; k >= 0; k--) {
+      const d = resolved.get(k) ?? dir[k]
+      if (d) return d
+    }
+    return 'R' as const
+  }
+  const after = (i: number) => {
+    for (let k = i + 1; k < chars.length; k++) if (dir[k]) return dir[k]!
+    return 'R' as const
+  }
+  // Pair the brackets (BD16): a closer matches the nearest open one of its kind.
+  const stack: number[] = []
+  const pairs: [number, number][] = []
+  chars.forEach((c, i) => {
+    if (OPENERS.includes(c)) stack.push(i)
+    else if (c === ')' || c === ']' || c === '}') {
+      for (let k = stack.length - 1; k >= 0; k--) {
+        if (CLOSER_OF[chars[stack[k]!]!] === c) {
+          pairs.push([stack[k]!, i])
+          stack.length = k
+          break
+        }
+      }
+    }
+  })
+  pairs.sort((a, b) => a[0] - b[0])
+  for (const [o, c] of pairs) {
+    const inside = dir.slice(o + 1, c)
+    let d: 'R' | 'L' | null = null
+    if (inside.includes('R')) d = 'R'
+    else if (inside.includes('L')) d = before(o) === 'L' ? 'L' : 'R'
+    if (d) {
+      resolved.set(o, d)
+      resolved.set(c, d)
+    }
+  }
+  return chars
+    .map((ch, i) => {
+      const m = MIRROR[ch]
+      if (!m) return ch
+      const d = resolved.get(i) ?? (before(i) === 'L' && after(i) === 'L' ? 'L' : 'R')
+      return d === 'R' ? m : ch
+    })
+    .join('')
+}
+
+/** The runs of an RTL line with its brackets mirrored across the whole line. */
+export function mirrorRuns(runs: Run[]): Run[] {
+  const whole = runs.map(r => r.text).join('')
+  const mirrored = Array.from(mirrorRtl(whole))
+  let k = 0
+  return runs.map(r => {
+    const n = Array.from(r.text).length
+    const text = mirrored.slice(k, k + n).join('')
+    k += n
+    return { ...r, text }
+  })
 }

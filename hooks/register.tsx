@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import { markText } from './bidi'
-import { type Block, splitBlocks } from './blocks'
+import { type Block, mirrorRtl, splitBlocks } from './blocks'
 
 export { markText } from './bidi'
 
@@ -182,7 +182,7 @@ export const register: Register = on => {
     if (HEB.test(typed)) {
       let at = 0
       for (const text of typed.split(String.fromCharCode(10))) {
-        all.push({ text, at })
+        all.push({ text: mirrorRtl(text), at })
         at += text.length + 1
       }
     }

@@ -204,3 +204,13 @@ test('on the terminal a Hebrew reply is drawn as dir="rtl" Text, with no control
   expect(/[\u200e\u200f\u202a-\u202e]/.test(row?.text ?? '')).toBe(false)
   await ui.unmount()
 })
+
+import { mirrorRtl } from '../hooks/blocks'
+
+test('brackets that resolve right to left are mirrored, Latin-only ones are not', () => {
+  expect(mirrorRtl('גרסה (0.8.0): חדשה')).toBe('גרסה )0.8.0(: חדשה')
+  expect(mirrorRtl('שים לב [Image #1] הפוכים')).toBe('שים לב ]Image #1[ הפוכים')
+  expect(mirrorRtl('הרץ foo(bar) עכשיו')).toBe('הרץ foo(bar) עכשיו')
+  expect(mirrorRtl('שלום (עולם)')).toBe('שלום )עולם(')
+  expect(mirrorRtl('אין סוגריים')).toBe('אין סוגריים')
+})
