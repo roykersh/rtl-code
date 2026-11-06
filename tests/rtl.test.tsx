@@ -214,3 +214,27 @@ test('brackets that resolve right to left are mirrored, Latin-only ones are not'
   expect(mirrorRtl('שלום (עולם)')).toBe('שלום )עולם(')
   expect(mirrorRtl('אין סוגריים')).toBe('אין סוגריים')
 })
+
+// ---- copying off the terminal ----
+import { fixCopy, isVisualRtl, toLogical } from '../hooks/copyfix'
+
+test('a copied right-to-left line comes back in reading order', () => {
+  expect(toLogical('םלוע םולש')).toBe('שלום עולם')
+  expect(toLogical('וישכע npm install יתצרה')).toBe('הרצתי npm install עכשיו')
+  expect(toLogical('םיצבק 3 שי')).toBe('יש 3 קבצים')
+  expect(toLogical('(םולש)')).toBe('(שלום)')
+  expect(toLogical('םולש ❮ ')).toBe('שלום')
+})
+
+test('only lines drawn right to left are turned around', () => {
+  expect(isVisualRtl('םלוע םולש')).toBe(true)
+  expect(isVisualRtl('Run the שלום step')).toBe(false)
+  expect(isVisualRtl('only English')).toBe(false)
+  expect(fixCopy('English line\nםלוע םולש')).toBe('English line\nשלום עולם')
+  expect(fixCopy('nothing to do')).toBe('nothing to do')
+})
+
+test('a wrapped paragraph, its rows joined, is matched to the line it came from', () => {
+  const known = ['אחת שתיים שלוש ארבע']
+  expect(fixCopy('םייתש תחא עברא שולש', known)).toBe('אחת שתיים שלוש ארבע')
+})

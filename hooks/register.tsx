@@ -2,7 +2,8 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import { markText } from './bidi'
-import { type Block, mirrorRtl, splitBlocks } from './blocks'
+import { type Block, inlineRuns, mirrorRtl, splitBlocks } from './blocks'
+import { fixCopy } from './copyfix'
 
 export { markText } from './bidi'
 
@@ -16,6 +17,46 @@ let blinker: { cancel: () => void } | undefined
 // Prompts typed while a turn ran that Claude has not read yet, as normalized text.
 const waiting = atom({ plugin: 'rtl-mode', key: 'waiting' } as const, [] as string[])
 const norm = (s: string) => s.replace(/\s+/g, ' ').trim()
+
+// The lines of the message rows drawn lately, as they read (markdown dropped),
+// newest last; a copied selection is checked against them (copyfix.ts).
+const drawn = new Map<string, string[]>()
+function remember(id: string, text: string) {
+  drawn.delete(id)
+  drawn.set(
+    id,
+    text
+      .split(String.fromCharCode(10))
+      .map(l => inlineRuns(l.replace(/^[ \t>]*(#{1,6}[ \t]+|[-*+][ \t]+|\d{1,9}[.)][ \t]+)?/, '')).map(r => r.text).join(''))
+      .filter(l => l.trim() !== ''),
+  )
+  if (drawn.size > 300) drawn.delete(drawn.keys().next().value!)
+}
+const knownLines = () => [...drawn.values()].flat()
+
+// A selection copied off the terminal reads right-to-left lines backwards. The
+// engine copies it as the mouse lets go; a moment later the mod puts the same
+// selection on the clipboard in reading order, and once more a little after.
+let poller: { cancel: () => void } | undefined
+let seen = ''
+let still = 0
+const ours = new Set<string>()
+async function watchSelection($: EngineInterface) {
+  if (!(await read($, isOn))) return
+  const sel = await $.ui.selection()
+  const text = sel?.text ?? ''
+  if (text !== seen) {
+    seen = text
+    still = 0
+    return
+  }
+  still++
+  if (!text || (still !== 1 && still !== 5)) return
+  const fixed = fixCopy(text, knownLines())
+  if (fixed === text) return
+  ours.add(fixed)
+  await $.ui.copy({ text: fixed, surface: 'terminal' })
+}
 
 /** Mirrors the box: the draft and caret, a lit caret after each edit, the blink while Hebrew shows. */
 async function mirror($: EngineInterface, text: string, cursor: number) {
@@ -127,8 +168,28 @@ export const register: Register = on => {
       argumentHint: '[on|off]',
       immediate: true,
     })
+    if (e.surface === 'terminal') {
+      poller?.cancel()
+      poller = $.clock.every(300, () => void watchSelection($).catch(() => {}))
+    }
     return next(e)
   })
+
+  // A copy of the person's selection, if the engine's own copy comes this way:
+  // put right in place. Another plugin's copy of some other text is left alone.
+  on('ui.copy', async ($, e, next) => {
+    if (ours.delete(e.text)) return next(e)
+    try {
+      if (await read($, isOn)) {
+        const sel = await $.ui.selection()
+        if (sel && sel.text === e.text) {
+          const fixed = fixCopy(e.text, knownLines())
+          if (fixed !== e.text) return next({ ...e, text: fixed })
+        }
+      }
+    } catch {}
+    return next(e)
+  }).catch(($, e, next) => next(e))
 
   on('command.run', { command: 'rtl' }, async ($, e) => {
     const arg = e.args.trim().toLowerCase()
@@ -151,6 +212,7 @@ export const register: Register = on => {
     if (e.surface === 'terminal') {
       // A notification or another agent's message keeps the engine's compact row.
       if (e.props.task || e.props.from) return next(e)
+      remember(e.requestId, e.props.text)
       const pending = (await read($, waiting)).includes(norm(e.props.text))
       // An English prompt still waiting gets the waiting look too, drawn as typed.
       const blocks = splitBlocks(e.props.text) ?? (pending ? [{ kind: 'md', text: e.props.text } as Block] : null)
@@ -164,6 +226,7 @@ export const register: Register = on => {
   on('ui.render', { component: 'AssistantMessage' }, async ($, e, next) => {
     if (!(await read($, isOn))) return next(e)
     if (e.surface === 'terminal') {
+      remember(e.requestId, e.props.text)
       const blocks = splitBlocks(e.props.text)
       return blocks ? drawBlocks($.ui.resolve(e), blocks, true) : next(e)
     }
