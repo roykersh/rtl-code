@@ -35,6 +35,8 @@ const GREEN = '#17DD95'
 // The toggle's box on the desktop: green-tinted while on, a neutral grey while off.
 const PILL_ON = 'rgba(52,211,153,0.16)'
 const PILL_OFF = 'rgba(148,163,184,0.16)'
+// A waiting prompt's row: a dark amber that reads on the dark theme.
+const WAIT_BG = '#3D3214'
 
 export const GUIDE = [
   'RTL mode is on: the person reads this conversation with Hebrew lines drawn right to left.',
@@ -57,9 +59,9 @@ function drawBlocks(ui: unknown, blocks: Block[], markdown: boolean, pending = f
     <Box flexDirection="column">
       {blocks.map((b, i) => {
         if (b.kind === 'blank') return <Text key={`b${i}`}> </Text>
-        if (b.kind === 'md') return markdown ? <Markdown key={`m${i}`} text={b.text} /> : <Text key={`m${i}`} dimColor={pending || undefined}>{b.text}</Text>
+        if (b.kind === 'md') return markdown ? <Markdown key={`m${i}`} text={b.text} /> : <Text key={`m${i}`}>{b.text}</Text>
         return (
-          <Text key={`r${i}`} dir="rtl" weight={b.heading ? 'bold' : undefined} dimColor={pending || undefined}>
+          <Text key={`r${i}`} dir="rtl" weight={b.heading ? 'bold' : undefined}>
             {b.indent + b.marker}
             {b.runs.map((r, j) =>
               r.code ? (
@@ -78,16 +80,16 @@ function drawBlocks(ui: unknown, blocks: Block[], markdown: boolean, pending = f
   if (markdown) return body
   // The person's own message: the prompt row's background and a mirrored marker
   // on the right, so it stands apart from the replies as it does with RTL off.
-  // One Claude has not read yet (typed mid-turn, still queued) has no background,
-  // dim text and a "waiting" mark instead, until the engine hands it over.
+  // One Claude has not read yet (typed mid-turn, still queued) sits on an amber
+  // row with a bold "waiting" label, until the engine hands it over.
   if (pending) {
     return (
-      <Box flexDirection="row">
+      <Box flexDirection="row" backgroundColor={WAIT_BG}>
         <Box flexDirection="column" flexGrow={1}>
           {body}
-          <Text dir="rtl" color="subtle" size="footnote">{'ממתין לקריאה ' + String.fromCharCode(0x25cc)}</Text>
+          <Text dir="rtl" color="warning" weight="bold">{String.fromCharCode(0x25f7) + ' ממתין לקריאה'}</Text>
         </Box>
-        <Text color="subtle"> {String.fromCharCode(0x25cc)} </Text>
+        <Text color="warning" weight="bold"> {String.fromCharCode(0x25f7)} </Text>
       </Box>
     )
   }
