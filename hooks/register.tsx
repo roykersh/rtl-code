@@ -9,6 +9,23 @@ export { markText } from './bidi'
 const isOn = atom({ plugin: 'rtl-mode', key: 'isOn' } as const, false)
 // The prompt box's draft, mirrored right to left above the box while it holds Hebrew.
 const draft = atom({ plugin: 'rtl-mode', key: 'draft' } as const, '')
+// Where the caret stands in the draft, and whether the drawn caret is lit (it blinks).
+const caret = atom({ plugin: 'rtl-mode', key: 'caret' } as const, 0)
+const lit = atom({ plugin: 'rtl-mode', key: 'lit' } as const, true)
+let blinker: { cancel: () => void } | undefined
+
+/** Mirrors the box: the draft and caret, a lit caret after each edit, the blink while Hebrew shows. */
+async function mirror($: EngineInterface, text: string, cursor: number) {
+  await update($, draft, () => text)
+  await update($, caret, () => cursor)
+  await update($, lit, () => true)
+  if (HEB.test(text)) {
+    blinker ??= $.clock.every(530, () => void update($, lit, b => !b).catch(() => {}))
+  } else {
+    blinker?.cancel()
+    blinker = undefined
+  }
+}
 const HEB = /[א-ת]/
 
 const GREEN = '#17DD95'
@@ -125,13 +142,13 @@ export const register: Register = on => {
   // Each keystroke's result, and every other change of the box (a submit clears it).
   on('prompt.edit', async ($, e, next) => {
     const r = await next(e)
-    if (await read($, isOn)) await update($, draft, () => r.text)
+    if (await read($, isOn)) await mirror($, r.text, r.cursor)
     return r
   }).catch(($, e, next) => next(e))
 
   on('prompt.change', async ($, e, next) => {
     const r = await next(e)
-    if (await read($, isOn)) await update($, draft, () => e.text)
+    if (await read($, isOn)) await mirror($, e.text, e.cursor)
     return r
   }).catch(($, e, next) => next(e))
 
@@ -149,7 +166,18 @@ export const register: Register = on => {
         </Text>
       </Button>
     )
-    const lines = HEB.test(typed) ? typed.split(String.fromCharCode(10)).slice(-Math.max(1, e.props.maxRows - 1)) : []
+    // Each line of the draft with where it starts, the last ones that fit.
+    const all: { text: string; at: number }[] = []
+    if (HEB.test(typed)) {
+      let at = 0
+      for (const text of typed.split(String.fromCharCode(10))) {
+        all.push({ text, at })
+        at += text.length + 1
+      }
+    }
+    const lines = all.slice(-Math.max(1, e.props.maxRows - 1))
+    const pos = lines.length ? await read($, caret) : 0
+    const blinkOn = lines.length ? await read($, lit) : false
     const row = (
       <Box flexDirection="row" alignItems="center" gap={1}>
         {e.surface === 'desktop' ? (
@@ -167,9 +195,19 @@ export const register: Register = on => {
     // The draft as it will read, flush right, above the toggle row.
     return (
       <Box flexDirection="column">
-        {lines.map((l, i) => (
-          <Text key={`d${i}`} dir="rtl">{l === '' ? ' ' : l}</Text>
-        ))}
+        {lines.map((l, i) => {
+          const k = pos - l.at
+          if (k < 0 || k > l.text.length) return <Text key={`d${i}`} dir="rtl">{l.text === '' ? ' ' : l.text}</Text>
+          // The caret: the cell it stands on drawn inverse while lit; past the end, a space.
+          const under = Array.from(l.text.slice(k))[0] ?? ' '
+          return (
+            <Text key={`d${i}`} dir="rtl">
+              {l.text.slice(0, k)}
+              <Text key={`d${i}c`} inverse={blinkOn}>{under}</Text>
+              {l.text.slice(k + under.length)}
+            </Text>
+          )
+        })}
         {row}
       </Box>
     )
