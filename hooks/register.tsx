@@ -50,7 +50,7 @@ export const GUIDE = [
  */
 function drawBlocks(ui: unknown, blocks: Block[], markdown: boolean) {
   const { Box, Text, Markdown } = ui as any
-  return (
+  const body = (
     <Box flexDirection="column">
       {blocks.map((b, i) => {
         if (b.kind === 'blank') return <Text key={`b${i}`}> </Text>
@@ -70,6 +70,17 @@ function drawBlocks(ui: unknown, blocks: Block[], markdown: boolean) {
           </Text>
         )
       })}
+    </Box>
+  )
+  if (markdown) return body
+  // The person's own message: the prompt row's background and a mirrored marker
+  // on the right, so it stands apart from the replies as it does with RTL off.
+  return (
+    <Box flexDirection="row" backgroundColor="userMessageBackground">
+      <Box flexDirection="column" flexGrow={1}>
+        {body}
+      </Box>
+      <Text color="subtle"> {String.fromCharCode(0x276e)} </Text>
     </Box>
   )
 }
