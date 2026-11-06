@@ -1,0 +1,10 @@
+{
+  "name": "rtl-mode",
+  "version": "0.4.0",
+  "description": "/rtl (on|off) and an ON/OFF button above the prompt: Hebrew lines in the transcript read right to left, English lines with Hebrew stay left to right with the Hebrew parts embedded, and Claude is told how to write mixed Hebrew/English so it reads cleanly.",
+  "author": {
+    "name": "Roy Kershberg"
+  },
+  "license": "MIT",
+  "types": "./types/index.d.ts"
+}
