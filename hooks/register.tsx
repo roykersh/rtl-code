@@ -13,6 +13,9 @@ const draft = atom({ plugin: 'rtl-mode', key: 'draft' } as const, '')
 const caret = atom({ plugin: 'rtl-mode', key: 'caret' } as const, 0)
 const lit = atom({ plugin: 'rtl-mode', key: 'lit' } as const, true)
 let blinker: { cancel: () => void } | undefined
+// Prompts typed while a turn ran that Claude has not read yet, as normalized text.
+const waiting = atom({ plugin: 'rtl-mode', key: 'waiting' } as const, [] as string[])
+const norm = (s: string) => s.replace(/\s+/g, ' ').trim()
 
 /** Mirrors the box: the draft and caret, a lit caret after each edit, the blink while Hebrew shows. */
 async function mirror($: EngineInterface, text: string, cursor: number) {
@@ -48,15 +51,15 @@ export const GUIDE = [
  * The terminal drawing: right-to-left lines as Text with dir="rtl" (flush
  * right, ordered by the engine), the rest as the engine draws it.
  */
-function drawBlocks(ui: unknown, blocks: Block[], markdown: boolean) {
+function drawBlocks(ui: unknown, blocks: Block[], markdown: boolean, pending = false) {
   const { Box, Text, Markdown } = ui as any
   const body = (
     <Box flexDirection="column">
       {blocks.map((b, i) => {
         if (b.kind === 'blank') return <Text key={`b${i}`}> </Text>
-        if (b.kind === 'md') return markdown ? <Markdown key={`m${i}`} text={b.text} /> : <Text key={`m${i}`}>{b.text}</Text>
+        if (b.kind === 'md') return markdown ? <Markdown key={`m${i}`} text={b.text} /> : <Text key={`m${i}`} dimColor={pending || undefined}>{b.text}</Text>
         return (
-          <Text key={`r${i}`} dir="rtl" weight={b.heading ? 'bold' : undefined}>
+          <Text key={`r${i}`} dir="rtl" weight={b.heading ? 'bold' : undefined} dimColor={pending || undefined}>
             {b.indent + b.marker}
             {b.runs.map((r, j) =>
               r.code ? (
@@ -75,6 +78,19 @@ function drawBlocks(ui: unknown, blocks: Block[], markdown: boolean) {
   if (markdown) return body
   // The person's own message: the prompt row's background and a mirrored marker
   // on the right, so it stands apart from the replies as it does with RTL off.
+  // One Claude has not read yet (typed mid-turn, still queued) has no background,
+  // dim text and a "waiting" mark instead, until the engine hands it over.
+  if (pending) {
+    return (
+      <Box flexDirection="row">
+        <Box flexDirection="column" flexGrow={1}>
+          {body}
+          <Text dir="rtl" color="subtle" size="footnote">{'ממתין לקריאה ' + String.fromCharCode(0x25cc)}</Text>
+        </Box>
+        <Text color="subtle"> {String.fromCharCode(0x25cc)} </Text>
+      </Box>
+    )
+  }
   return (
     <Box flexDirection="row" backgroundColor="userMessageBackground">
       <Box flexDirection="column" flexGrow={1}>
@@ -133,8 +149,11 @@ export const register: Register = on => {
     if (e.surface === 'terminal') {
       // A notification or another agent's message keeps the engine's compact row.
       if (e.props.task || e.props.from) return next(e)
-      const blocks = splitBlocks(e.props.text)
-      return blocks ? drawBlocks($.ui.resolve(e), blocks, false) : next(e)
+      const pending = (await read($, waiting)).includes(norm(e.props.text))
+      // An English prompt still waiting gets the waiting look too, drawn as typed.
+      const blocks = splitBlocks(e.props.text) ?? (pending ? [{ kind: 'md', text: e.props.text } as Block] : null)
+      if (!blocks) return next(e)
+      return drawBlocks($.ui.resolve(e), blocks, false, pending)
     }
     const text = markText(e.props.text)
     return text === e.props.text ? next(e) : next({ ...e, props: { ...e.props, text } })
@@ -148,6 +167,39 @@ export const register: Register = on => {
     }
     const text = markText(e.props.text)
     return text === e.props.text ? next(e) : next({ ...e, props: { ...e.props, text } })
+  }).catch(($, e, next) => next(e))
+
+  // A prompt typed at the box while a turn runs waits in the queue until the
+  // engine hands it to Claude: mid-turn as a queued_command attachment, or as
+  // the next turn's prompt. Its row is drawn as waiting until then.
+  on('prompt.submit', async ($, e, next) => {
+    const r = await next(e)
+    try {
+      if (e.turnId && e.origin.kind === 'composer' && 'text' in r && (await read($, isOn))) {
+        const t = norm(r.text)
+        if (t) await update($, waiting, w => (w.includes(t) ? w : [...w, t]))
+      }
+    } catch {}
+    return r
+  }).catch(($, e, next) => next(e))
+
+  on('session.append', async ($, e, next) => {
+    const r = await next(e)
+    try {
+      if (e.agentId || (e.door !== 'attachment' && e.door !== 'prompt')) return r
+      const w = await read($, waiting)
+      if (w.length === 0) return r
+      const said = norm(
+        (e.message.content ?? [])
+          .map(c => (c.type === 'text' ? c.text : ''))
+          .join(' '),
+      )
+      if (said) {
+        const left = w.filter(t => !said.includes(t))
+        if (left.length !== w.length) await update($, waiting, () => left)
+      }
+    } catch {}
+    return r
   }).catch(($, e, next) => next(e))
 
   // Each keystroke's result, and every other change of the box (a submit clears it).
