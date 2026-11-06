@@ -7,6 +7,9 @@ import { type Block, splitBlocks } from './blocks'
 export { markText } from './bidi'
 
 const isOn = atom({ plugin: 'rtl-mode', key: 'isOn' } as const, false)
+// The prompt box's draft, mirrored right to left above the box while it holds Hebrew.
+const draft = atom({ plugin: 'rtl-mode', key: 'draft' } as const, '')
+const HEB = /[א-ת]/
 
 const GREEN = '#17DD95'
 // The toggle's box on the desktop: green-tinted while on, a neutral grey while off.
@@ -119,10 +122,24 @@ export const register: Register = on => {
     return text === e.props.text ? next(e) : next({ ...e, props: { ...e.props, text } })
   }).catch(($, e, next) => next(e))
 
+  // Each keystroke's result, and every other change of the box (a submit clears it).
+  on('prompt.edit', async ($, e, next) => {
+    const r = await next(e)
+    if (await read($, isOn)) await update($, draft, () => r.text)
+    return r
+  }).catch(($, e, next) => next(e))
+
+  on('prompt.change', async ($, e, next) => {
+    const r = await next(e)
+    if (await read($, isOn)) await update($, draft, () => e.text)
+    return r
+  }).catch(($, e, next) => next(e))
+
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const below = await next(e)
     if (e.props.hasSurvey) return below
     const value = await read($, isOn)
+    const typed = value && e.surface === 'terminal' ? await read($, draft) : ''
     const { Box, Button, Text } = $.ui.resolve(e)
     const button = (
       <Button key="rtl" plain onPress={() => setMode($, !value, true)}>
@@ -132,7 +149,8 @@ export const register: Register = on => {
         </Text>
       </Button>
     )
-    return (
+    const lines = HEB.test(typed) ? typed.split(String.fromCharCode(10)).slice(-Math.max(1, e.props.maxRows - 1)) : []
+    const row = (
       <Box flexDirection="row" alignItems="center" gap={1}>
         {e.surface === 'desktop' ? (
           // On the desktop the button gets a tinted box, like the usage pills beside it.
@@ -143,6 +161,16 @@ export const register: Register = on => {
           button
         )}
         {below}
+      </Box>
+    )
+    if (lines.length === 0) return row
+    // The draft as it will read, flush right, above the toggle row.
+    return (
+      <Box flexDirection="column">
+        {lines.map((l, i) => (
+          <Text key={`d${i}`} dir="rtl">{l === '' ? ' ' : l}</Text>
+        ))}
+        {row}
       </Box>
     )
   }).catch(($, e, next) => next(e))
