@@ -209,13 +209,13 @@ export const register: Register = on => {
         {lines.map((l, i) => {
           const k = pos - l.at
           if (k < 0 || k > l.text.length) return <Text key={`d${i}`} dir="rtl">{l.text === '' ? ' ' : l.text}</Text>
-          // The caret: the cell it stands on drawn inverse while lit; past the end, a space.
-          const under = Array.from(l.text.slice(k))[0] ?? ' '
+          // The caret: a thin bar in a cell of its own between the characters, a
+          // space while it blinks off so the text never moves.
           return (
             <Text key={`d${i}`} dir="rtl">
               {l.text.slice(0, k)}
-              <Text key={`d${i}c`} inverse={blinkOn}>{under}</Text>
-              {l.text.slice(k + under.length)}
+              <Text key={`d${i}c`} color="text">{blinkOn ? String.fromCharCode(0x2502) : ' '}</Text>
+              {l.text.slice(k)}
             </Text>
           )
         })}
