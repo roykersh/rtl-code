@@ -1,10 +1,20 @@
 {
-  "name": "rtl-mode",
-  "version": "0.14.0",
-  "description": "/rtl (on|off) and an ON/OFF button under the prompt: Hebrew lines in the transcript read right to left, English lines with Hebrew stay left to right with the Hebrew parts embedded, and Claude is told how to write mixed Hebrew/English so it reads cleanly.",
+  "name": "rtl-code",
+  "version": "0.15.0",
+  "description": "RTL Code: Hebrew reads right to left in the Claude Code terminal. /rtl or a footer button turns it on: Hebrew lines flush right with their markdown kept, a live mirrored preview of a Hebrew draft above the prompt, your own Hebrew messages marked, Hebrew copied off the terminal pasted in reading order, and Claude told how to write mixed Hebrew/English.",
   "author": {
     "name": "Roy Kershberg"
   },
   "license": "MIT",
+  "repository": "https://github.com/roykersh/rtl-code",
+  "homepage": "https://github.com/roykersh/rtl-code",
+  "keywords": [
+    "rtl",
+    "hebrew",
+    "bidi",
+    "right-to-left",
+    "terminal",
+    "i18n"
+  ],
   "types": "./types/index.d.ts"
 }

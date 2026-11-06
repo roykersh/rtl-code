@@ -1,7 +1,7 @@
-export type RtlModeIsOn = boolean
+export type RtlCodeIsOn = boolean
 
 declare module 'claude-code' {
   interface PluginState {
-    'rtl-mode': { isOn: RtlModeIsOn; draft: string; caret: number; lit: boolean; waiting: string[]; folded: boolean }
+    'rtl-code': { isOn: RtlCodeIsOn; draft: string; caret: number; lit: boolean; waiting: string[]; folded: boolean }
   }
 }

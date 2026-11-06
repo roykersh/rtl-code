@@ -75,7 +75,7 @@ const rtl = (args: string) => ({
 })
 
 const BAND = {
-  plugin: 'rtl-mode',
+  plugin: 'rtl-code',
   component: 'AbovePrompt',
   requestId: 'band',
   props: {
@@ -89,7 +89,7 @@ const BAND = {
 } as const
 
 const MODES = {
-  plugin: 'rtl-mode',
+  plugin: 'rtl-code',
   component: 'SessionMode',
   requestId: 'modes',
   props: { modes: [] as string[] },
@@ -208,7 +208,7 @@ test('/rtl on rewrites messages and adds the writing guide; /rtl off undoes both
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
 
   const MSG = {
-    plugin: 'rtl-mode',
+    plugin: 'rtl-code',
     component: 'AssistantMessage',
     requestId: 'm1',
     surface: 'desktop',
@@ -220,7 +220,7 @@ test('/rtl on rewrites messages and adds the writing guide; /rtl off undoes both
   expect((await ui.find({ type: 'Text' }))?.text).toBe(RLM + RLE + 'שלום לכולם ' + LRE + '`x`' + PDF + ' world')
   await ui.unmount()
   const composed = await $.prompt.compose(COMPOSE)
-  expect(composed.sections.map(s => s.id)).toEqual(['intro', 'rtl-mode:guide'])
+  expect(composed.sections.map(s => s.id)).toEqual(['intro', 'rtl-code:guide'])
 
   expect((await $.command.run(rtl('off'))).text).toBe('RTL mode OFF')
   const plain = await $.ui.mount(MSG)
@@ -265,7 +265,7 @@ test('on the terminal a Hebrew reply is drawn as dir="rtl" Text, with no control
   })
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   const ui = await $.ui.mount({
-    plugin: 'rtl-mode',
+    plugin: 'rtl-code',
     component: 'AssistantMessage',
     requestId: 't1',
     surface: 'terminal',
@@ -310,4 +310,71 @@ test('only lines drawn right to left are turned around', () => {
 test('a wrapped paragraph, its rows joined, is matched to the line it came from', () => {
   const known = ['אחת שתיים שלוש ארבע']
   expect(fixCopy('םייתש תחא עברא שולש', known)).toBe('אחת שתיים שלוש ארבע')
+})
+
+// ---- a prompt typed mid-turn waits until Claude reads it ----
+
+const USER = (text: string) =>
+  ({
+    plugin: 'rtl-code',
+    component: 'UserMessage',
+    requestId: 'u-' + text.length,
+    surface: 'terminal',
+    props: { text },
+  }) as const
+
+async function typedMidTurn($: any, on: any, text: string) {
+  mock.store(on, { isOn: true })
+  mock.session(on)
+  on('command.register', () => ({ value: { command: 'rtl' } }))
+  on('session.start', (_: any, e: any) => ({ cwd: e.cwd }))
+  on('prompt.submit', (_: any, e: any) => ({ text: e.text }))
+  on('turn.start', (_: any, e: any) => ({ turnId: e.turnId }))
+  engineDraws(on)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.prompt.submit({ text, turnId: 't1', wait: false, origin: { kind: 'composer' } })
+}
+const isWaiting = async ($: any, text: string) => {
+  const ui = await $.ui.mount(USER(text))
+  const label = await ui.find({ type: 'Text', text: /ממתין לקריאה/ })
+  await ui.unmount()
+  return label !== undefined
+}
+const queueRecord = (text: string, uuid: string) => ({
+  message: { type: 'user' as const, role: 'user' as const, content: [{ type: 'text' as const, text }] },
+  door: 'queue' as const,
+  origin: { kind: 'composer' as const },
+  uuid,
+})
+
+test('a prompt typed mid-turn waits, and is read once the queue takes it out', async ($, on) => {
+  const text = 'שאלה נוספת על הקוד'
+  await typedMidTurn($, on, text)
+  expect(await isWaiting($, text)).toBe(true)
+  // Put in the queue: still waiting.
+  await $.session.append(queueRecord(text, 'q1') as any)
+  expect(await isWaiting($, text)).toBe(true)
+  // Taken out to be read mid-turn: read.
+  await $.session.append(queueRecord(text, 'q2') as any)
+  expect(await isWaiting($, text)).toBe(false)
+})
+
+test('a waiting prompt is read when its text arrives in an attachment row', async ($, on) => {
+  const text = 'שאלה נוספת\nבשתי שורות'
+  await typedMidTurn($, on, text)
+  await $.session.append({
+    message: { type: 'attachment', name: 'queued_command', content: [{ type: 'text', text: 'The user sent:\n' + text }] },
+    door: 'attachment',
+    origin: { kind: 'composer' },
+    uuid: 'a1',
+  } as any)
+  expect(await isWaiting($, text)).toBe(false)
+})
+
+test('a waiting prompt is read when the next turn starts', async ($, on) => {
+  const text = 'עוד הודעה'
+  await typedMidTurn($, on, text)
+  expect(await isWaiting($, text)).toBe(true)
+  await $.turn.start({ text, turnId: 't2' })
+  expect(await isWaiting($, text)).toBe(false)
 })

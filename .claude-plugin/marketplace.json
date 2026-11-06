@@ -1,14 +1,14 @@
 {
-  "name": "rtl-mode",
-  "description": "/rtl (on|off) and an ON/OFF button above the prompt: Hebrew lines in the transcript read right to left, English lines with Hebrew stay left to right with the Hebrew parts embedded, and Claude is told how to write mixed Hebrew/English so it reads cleanly.",
+  "name": "rtl-code",
+  "description": "RTL Code: Hebrew reads right to left in the Claude Code terminal",
   "owner": {
     "name": "Roy Kershberg"
   },
   "plugins": [
     {
-      "name": "rtl-mode",
+      "name": "rtl-code",
       "source": "./",
-      "description": "/rtl (on|off) and an ON/OFF button above the prompt: Hebrew lines in the transcript read right to left, English lines with Hebrew stay left to right with the Hebrew parts embedded, and Claude is told how to write mixed Hebrew/English so it reads cleanly."
+      "description": "RTL Code: Hebrew reads right to left in the Claude Code terminal. /rtl or a footer button turns it on: Hebrew lines flush right with their markdown kept, a live mirrored preview of a Hebrew draft above the prompt, your own Hebrew messages marked, Hebrew copied off the terminal pasted in reading order, and Claude told how to write mixed Hebrew/English."
     }
   ]
 }

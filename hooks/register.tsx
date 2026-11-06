@@ -7,18 +7,39 @@ import { fixCopy } from './copyfix'
 
 export { markText } from './bidi'
 
-const isOn = atom({ plugin: 'rtl-mode', key: 'isOn' } as const, false)
+const isOn = atom({ plugin: 'rtl-code', key: 'isOn' } as const, false)
 // The prompt box's draft, mirrored right to left above the box while it holds Hebrew.
-const draft = atom({ plugin: 'rtl-mode', key: 'draft' } as const, '')
+const draft = atom({ plugin: 'rtl-code', key: 'draft' } as const, '')
 // Where the caret stands in the draft, and whether the drawn caret is lit (it blinks).
-const caret = atom({ plugin: 'rtl-mode', key: 'caret' } as const, 0)
-const lit = atom({ plugin: 'rtl-mode', key: 'lit' } as const, true)
+const caret = atom({ plugin: 'rtl-code', key: 'caret' } as const, 0)
+const lit = atom({ plugin: 'rtl-code', key: 'lit' } as const, true)
 // Whether the draft preview is folded down to its mark; kept across sessions in $.store.
-const folded = atom({ plugin: 'rtl-mode', key: 'folded' } as const, false)
+const folded = atom({ plugin: 'rtl-code', key: 'folded' } as const, false)
 let blinker: { cancel: () => void } | undefined
 // Prompts typed while a turn ran that Claude has not read yet, as normalized text.
-const waiting = atom({ plugin: 'rtl-mode', key: 'waiting' } as const, [] as string[])
+const waiting = atom({ plugin: 'rtl-code', key: 'waiting' } as const, [] as string[])
 const norm = (s: string) => s.replace(/\s+/g, ' ').trim()
+// How many times the queue's record of each text was raised (put in, taken out).
+const queued = new Map<string, number>()
+/** Every string in a value (a row, its blocks), joined: where a prompt's words may sit. */
+function textsOf(v: unknown): string {
+  if (typeof v === 'string') return v
+  if (Array.isArray(v)) return v.map(textsOf).join(' ')
+  if (v && typeof v === 'object') return Object.values(v).map(textsOf).join(' ')
+  return ''
+}
+/** Drops the waiting prompts that `said` holds: Claude has read them. */
+async function markRead(said: string, $: EngineInterface) {
+  if (!said) return
+  const w = await read($, waiting)
+  if (w.length === 0) return
+  const left = w.filter(t => !said.includes(t))
+  if (left.length !== w.length) await update($, waiting, () => left)
+}
+async function clearWaiting($: EngineInterface) {
+  queued.clear()
+  if ((await read($, waiting)).length > 0) await update($, waiting, () => [] as string[])
+}
 
 // The lines of the message rows drawn lately, as they read (markdown dropped),
 // newest last; a copied selection is checked against them (copyfix.ts).
@@ -229,7 +250,7 @@ export const register: Register = on => {
     const composed = await next(e)
     if (!(await read($, isOn))) return composed
     return {
-      sections: [...composed.sections, { id: 'rtl-mode:guide', text: GUIDE, scope: 'session' as const }],
+      sections: [...composed.sections, { id: 'rtl-code:guide', text: GUIDE, scope: 'session' as const }],
     }
   }).catch(($, e, next) => next(e))
 
@@ -267,29 +288,49 @@ export const register: Register = on => {
     const r = await next(e)
     try {
       if (e.turnId && e.origin.kind === 'composer' && 'text' in r && (await read($, isOn))) {
-        const t = norm(r.text)
+        const t = norm(r.text ?? '')
         if (t) await update($, waiting, w => (w.includes(t) ? w : [...w, t]))
       }
     } catch {}
     return r
   }).catch(($, e, next) => next(e))
 
+  // Claude reads a waiting prompt by one of three roads, and any one clears it:
+  // the queue's record of it is raised twice under the door `queue` (put in
+  // the queue, then taken out to be read); its text arrives in a row (the
+  // queued_command attachment mid-turn, or the next turn's prompt); or a turn
+  // starts or ends on the main loop, when the queue has been read in any case.
   on('session.append', async ($, e, next) => {
     const r = await next(e)
     try {
-      if (e.agentId || (e.door !== 'attachment' && e.door !== 'prompt')) return r
-      const w = await read($, waiting)
-      if (w.length === 0) return r
-      const said = norm(
-        (e.message.content ?? [])
-          .map(c => (c.type === 'text' ? c.text : ''))
-          .join(' '),
-      )
-      if (said) {
-        const left = w.filter(t => !said.includes(t))
-        if (left.length !== w.length) await update($, waiting, () => left)
+      if (e.agentId) return r
+      if (e.door === 'queue') {
+        const t = norm(textsOf(e.message.content))
+        if (!t) return r
+        const n = (queued.get(t) ?? 0) + 1
+        if (n < 2) {
+          queued.set(t, n)
+          return r
+        }
+        queued.delete(t)
+        await markRead(t, $)
+        return r
       }
+      if (e.door !== 'attachment' && e.door !== 'prompt') return r
+      await markRead(norm(textsOf(e.message)), $)
     } catch {}
+    return r
+  }).catch(($, e, next) => next(e))
+
+  on('turn.start', async ($, e, next) => {
+    const r = await next(e)
+    if (e.agentId === undefined) await clearWaiting($).catch(() => {})
+    return r
+  }).catch(($, e, next) => next(e))
+
+  on('turn.complete', async ($, e, next) => {
+    const r = await next(e)
+    if (e.agentId === undefined) await clearWaiting($).catch(() => {})
     return r
   }).catch(($, e, next) => next(e))
 
