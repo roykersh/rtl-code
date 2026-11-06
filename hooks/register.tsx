@@ -2,6 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import { markText } from './bidi'
+import { type Block, splitBlocks } from './blocks'
 
 export { markText } from './bidi'
 
@@ -21,6 +22,37 @@ export const GUIDE = [
   '- Put every command, file path and code identifier in backticks.',
   'When you answer in English: write normally, and put any Hebrew word or phrase inside double quotes.',
 ].join('\n')
+
+
+/**
+ * The terminal drawing: right-to-left lines as Text with dir="rtl" (flush
+ * right, ordered by the engine), the rest as the engine draws it.
+ */
+function drawBlocks(ui: unknown, blocks: Block[], markdown: boolean) {
+  const { Box, Text, Markdown } = ui as any
+  return (
+    <Box flexDirection="column">
+      {blocks.map((b, i) => {
+        if (b.kind === 'blank') return <Text key={`b${i}`}> </Text>
+        if (b.kind === 'md') return markdown ? <Markdown key={`m${i}`} text={b.text} /> : <Text key={`m${i}`}>{b.text}</Text>
+        return (
+          <Text key={`r${i}`} dir="rtl" weight={b.heading ? 'bold' : undefined}>
+            {b.indent + b.marker}
+            {b.runs.map((r, j) =>
+              r.code ? (
+                <Text key={`r${i}c${j}`} color="permission">{r.text}</Text>
+              ) : r.bold || r.italic ? (
+                <Text key={`r${i}s${j}`} weight={r.bold ? 'bold' : undefined} italic={r.italic}>{r.text}</Text>
+              ) : (
+                r.text
+              ),
+            )}
+          </Text>
+        )
+      })}
+    </Box>
+  )
+}
 
 const OFF_NOTE = 'RTL mode is off now: the RTL writing rules given earlier no longer apply.'
 
@@ -67,12 +99,22 @@ export const register: Register = on => {
 
   on('ui.render', { component: 'UserMessage' }, async ($, e, next) => {
     if (!(await read($, isOn))) return next(e)
+    if (e.surface === 'terminal') {
+      // A notification or another agent's message keeps the engine's compact row.
+      if (e.props.task || e.props.from) return next(e)
+      const blocks = splitBlocks(e.props.text)
+      return blocks ? drawBlocks($.ui.resolve(e), blocks, false) : next(e)
+    }
     const text = markText(e.props.text)
     return text === e.props.text ? next(e) : next({ ...e, props: { ...e.props, text } })
   }).catch(($, e, next) => next(e))
 
   on('ui.render', { component: 'AssistantMessage' }, async ($, e, next) => {
     if (!(await read($, isOn))) return next(e)
+    if (e.surface === 'terminal') {
+      const blocks = splitBlocks(e.props.text)
+      return blocks ? drawBlocks($.ui.resolve(e), blocks, true) : next(e)
+    }
     const text = markText(e.props.text)
     return text === e.props.text ? next(e) : next({ ...e, props: { ...e.props, text } })
   }).catch(($, e, next) => next(e))

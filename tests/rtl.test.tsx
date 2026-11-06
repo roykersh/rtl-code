@@ -157,3 +157,50 @@ test('/rtl on rewrites messages and adds the writing guide; /rtl off undoes both
 
   expect((await $.command.run(rtl('sideways'))).text).toContain('Usage')
 })
+
+// ---- the terminal drawing ----
+
+import { inlineRuns, splitBlocks } from '../hooks/blocks'
+
+test('terminal blocks: Hebrew lines go RTL, English lines and fences stay markdown', () => {
+  const b = splitBlocks('## כותרת\n\nשורה עם `npm i` ו **מודגש**\n- פריט\n1. ראשון\n\nEnglish line here\nmore English\n\n```\nשלום\n```')!
+  expect(b.map(x => x.kind)).toEqual(['rtl', 'blank', 'rtl', 'rtl', 'rtl', 'blank', 'md'])
+  const [h, , line, item, num, , md] = b as any[]
+  expect(h.heading).toBe(true)
+  expect(line.runs).toEqual([{ text: 'שורה עם ' }, { text: 'npm i', code: true }, { text: ' ו ' }, { text: 'מודגש', bold: true }])
+  expect(item.marker).toBe('• ')
+  expect(num.marker).toBe('1. ')
+  expect(md.text).toBe('English line here\nmore English\n\n```\nשלום\n```')
+})
+
+test('terminal blocks: nothing to do without a right-to-left line', () => {
+  expect(splitBlocks('only English')).toBe(null)
+  expect(splitBlocks('English with one מילה inside')).toBe(null)
+})
+
+test('inline runs: links show their text, escapes drop the backslash', () => {
+  expect(inlineRuns(String.raw`ראה [המדריך](https://x.y) \*כאן\*`)).toEqual([{ text: 'ראה המדריך *כאן*' }])
+})
+
+test('on the terminal a Hebrew reply is drawn as dir="rtl" Text, with no control marks', async ($, on) => {
+  mock.store(on, { isOn: true })
+  on('command.register', () => ({ value: { command: 'rtl' } }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('ui.render', ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>{(e.props as { text: string }).text}</Text>
+  })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  const ui = await $.ui.mount({
+    plugin: 'rtl-mode',
+    component: 'AssistantMessage',
+    requestId: 't1',
+    surface: 'terminal',
+    props: { text: 'שלום לכולם `x` world', isFirstOfReply: true },
+  } as const)
+  const row = await ui.find({ type: 'Text', text: /שלום/ })
+  expect(row?.text).toBe('שלום לכולם x world')
+  expect(row?.props?.dir).toBe('rtl')
+  expect(/[\u200e\u200f\u202a-\u202e]/.test(row?.text ?? '')).toBe(false)
+  await ui.unmount()
+})
