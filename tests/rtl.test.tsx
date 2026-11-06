@@ -88,18 +88,30 @@ const BAND = {
   },
 } as const
 
-test('the button shows OFF, then ON after a press, and the choice is stored', async ($, on) => {
-  mock.store(on)
-  on('command.register', () => ({ value: { command: 'rtl' } }))
-  on('ui.render', ($, e) => {
+const MODES = {
+  plugin: 'rtl-mode',
+  component: 'SessionMode',
+  requestId: 'modes',
+  props: { modes: [] as string[] },
+} as const
+
+const engineDraws = (on: any) =>
+  on('ui.render', ($: any, e: any) => {
     const { Box } = $.ui.resolve(e)
     return <Box />
   })
+
+test('the button shows OFF, then ON after a press, and the choice is stored', async ($, on) => {
+  mock.store(on)
+  on('command.register', () => ({ value: { command: 'rtl' } }))
+  engineDraws(on)
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
 
-  for (const surface of ['desktop', 'terminal'] as const) {
-    const ui = await $.ui.mount({ ...BAND, surface })
+  // The terminal draws it under the input box, beside the session's mode labels;
+  // the desktop keeps its pill in the band above the prompt.
+  for (const [surface, site] of [['terminal', MODES], ['desktop', BAND]] as const) {
+    const ui = await $.ui.mount({ ...(site as any), surface })
     expect((await ui.find({ type: 'Text', text: /^(ON|OFF)$/ }))?.text).toBe('OFF')
     await ui.press({ key: 'rtl' })
     expect((await ui.find({ type: 'Text', text: /^(ON|OFF)$/ }))?.text).toBe('ON')
@@ -112,13 +124,74 @@ test('a stored ON is read back when the next session starts', async ($, on) => {
   mock.store(on, { isOn: true })
   on('command.register', () => ({ value: { command: 'rtl' } }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))
-  on('ui.render', ($, e) => {
-    const { Box } = $.ui.resolve(e)
-    return <Box />
-  })
+  engineDraws(on)
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
   expect((await ui.find({ type: 'Text', text: /^(ON|OFF)$/ }))?.text).toBe('ON')
+  await ui.unmount()
+  const modes = await $.ui.mount({ ...MODES, surface: 'terminal' })
+  expect((await modes.find({ type: 'Text', text: /^(ON|OFF)$/ }))?.text).toBe('ON')
+  await modes.unmount()
+})
+
+test('on the terminal the band above the prompt holds no toggle', async ($, on) => {
+  mock.store(on, { isOn: true })
+  on('command.register', () => ({ value: { command: 'rtl' } }))
+  engineDraws(on)
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  const band = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect(await band.find({ type: 'Text', text: /^(ON|OFF)$/ })).toBe(undefined)
+  await band.unmount()
+  // The desktop's footer is left as the engine draws it.
+  const modes = await $.ui.mount({ ...MODES, surface: 'desktop' })
+  expect(await modes.find({ type: 'Text', text: /^(ON|OFF)$/ })).toBe(undefined)
+  await modes.unmount()
+})
+
+const typeDraft = ($: any, text: string) => $.prompt.change({ text, cursor: 0, origin: { kind: 'history' } })
+
+test('the Hebrew draft preview folds to its mark and opens again, and the choice is stored', async ($, on) => {
+  mock.store(on, { isOn: true })
+  on('command.register', () => ({ value: { command: 'rtl' } }))
+  engineDraws(on)
+  on('prompt.change', (_, e) => ({ text: e.text }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await typeDraft($, 'שלום עולם')
+
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect((await ui.find({ type: 'Text', text: /שלום/ }))?.props?.dir).toBe('rtl')
+  expect((await ui.find({ type: 'Button', key: 'fold' }))?.text).toBe('▾')
+  await ui.press({ key: 'fold' })
+  expect(await ui.find({ type: 'Text', text: /שלום/ })).toBe(undefined)
+  expect((await ui.find({ type: 'Button', key: 'fold' }))?.text).toBe('▸')
+  await ui.unmount()
+
+  // A new session reads the fold back from the store.
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  const again = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect((await again.find({ type: 'Button', key: 'fold' }))?.text).toBe('▸')
+  await again.press({ key: 'fold' })
+  expect((await again.find({ type: 'Text', text: /שלום/ }))?.props?.dir).toBe('rtl')
+  await again.unmount()
+})
+
+test('a stored fold is read back, and without Hebrew in the draft no mark shows', async ($, on) => {
+  mock.store(on, { isOn: true, folded: true })
+  on('command.register', () => ({ value: { command: 'rtl' } }))
+  engineDraws(on)
+  on('prompt.change', (_, e) => ({ text: e.text }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await typeDraft($, 'only English')
+  const plain = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect(await plain.find({ type: 'Button', key: 'fold' })).toBe(undefined)
+  await plain.unmount()
+  await typeDraft($, 'שלום')
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect((await ui.find({ type: 'Button', key: 'fold' }))?.text).toBe('▸')
+  expect(await ui.find({ type: 'Text', text: /שלום/ })).toBe(undefined)
   await ui.unmount()
 })
 

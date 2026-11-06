@@ -13,6 +13,8 @@ const draft = atom({ plugin: 'rtl-mode', key: 'draft' } as const, '')
 // Where the caret stands in the draft, and whether the drawn caret is lit (it blinks).
 const caret = atom({ plugin: 'rtl-mode', key: 'caret' } as const, 0)
 const lit = atom({ plugin: 'rtl-mode', key: 'lit' } as const, true)
+// Whether the draft preview is folded down to its mark; kept across sessions in $.store.
+const folded = atom({ plugin: 'rtl-mode', key: 'folded' } as const, false)
 let blinker: { cancel: () => void } | undefined
 // Prompts typed while a turn ran that Claude has not read yet, as normalized text.
 const waiting = atom({ plugin: 'rtl-mode', key: 'waiting' } as const, [] as string[])
@@ -146,6 +148,28 @@ function drawBlocks(ui: unknown, blocks: Block[], markdown: boolean, pending = f
 
 const OFF_NOTE = 'RTL mode is off now: the RTL writing rules given earlier no longer apply.'
 
+/**
+ * The toggle itself. On the terminal it sits under the input box, at the right
+ * of the prompt footer beside the session's own mode labels; on the desktop it
+ * keeps its pill in the band above the prompt.
+ */
+function toggle(ui: unknown, $: EngineInterface, value: boolean) {
+  const { Button, Text } = ui as any
+  return (
+    <Button key="rtl" plain onPress={() => setMode($, !value, true)}>
+      <Text dimColor size="footnote" mono>RTL </Text>
+      <Text color={value ? GREEN : 'subtle'} weight="bold" size="footnote" mono>
+        {value ? 'ON' : 'OFF'}
+      </Text>
+    </Button>
+  )
+}
+
+async function setFolded($: EngineInterface, value: boolean) {
+  await update($, folded, () => value)
+  await $.store.set('folded', value)
+}
+
 async function setMode($: EngineInterface, value: boolean, tellModel: boolean) {
   const before = await read($, isOn)
   await update($, isOn, () => value)
@@ -162,6 +186,8 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     const stored = await $.store.get('isOn')
     await update($, isOn, () => stored === true)
+    const fold = await $.store.get('folded')
+    await update($, folded, () => fold === true)
     await $.command.register({
       name: 'rtl',
       description: 'Right-to-left display for Hebrew: toggle, or /rtl on, /rtl off',
@@ -280,63 +306,86 @@ export const register: Register = on => {
     return r
   }).catch(($, e, next) => next(e))
 
+  on('ui.render', { component: 'SessionMode' }, async ($, e, next) => {
+    if (e.surface !== 'terminal') return next(e)
+    const modes = await next(e)
+    const value = await read($, isOn)
+    const ui = $.ui.resolve(e)
+    const { Box } = ui
+    return (
+      <Box flexDirection="row" gap={1}>
+        {modes}
+        {toggle(ui, $, value)}
+      </Box>
+    )
+  }).catch(($, e, next) => next(e))
+
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const below = await next(e)
     if (e.props.hasSurvey) return below
     const value = await read($, isOn)
+    const ui = $.ui.resolve(e)
+    const { Box, Button, Text } = ui
+    if (e.surface === 'desktop') {
+      // On the desktop the button gets a tinted box, like the usage pills beside it.
+      return (
+        <Box flexDirection="row" alignItems="center" gap={1}>
+          <Box backgroundColor={value ? PILL_ON : PILL_OFF} paddingX="sm" paddingY="xs">
+            {toggle(ui, $, value)}
+          </Box>
+          {below}
+        </Box>
+      )
+    }
     const typed = value && e.surface === 'terminal' ? await read($, draft) : ''
-    const { Box, Button, Text } = $.ui.resolve(e)
-    const button = (
-      <Button key="rtl" plain onPress={() => setMode($, !value, true)}>
-        <Text dimColor size="footnote" mono>RTL </Text>
-        <Text color={value ? GREEN : 'subtle'} weight="bold" size="footnote" mono>
-          {value ? 'ON' : 'OFF'}
-        </Text>
+    if (!HEB.test(typed)) return below
+    const fold = await read($, folded)
+    // The mark that folds the preview away and opens it again.
+    const mark = (
+      <Button key="fold" plain dimColor onPress={() => setFolded($, !fold)}>
+        {String.fromCharCode(fold ? 0x25b8 : 0x25be)}
       </Button>
     )
+    if (fold) {
+      return (
+        <Box flexDirection="column">
+          <Box flexDirection="row">{mark}</Box>
+          {below}
+        </Box>
+      )
+    }
     // Each line of the draft with where it starts, the last ones that fit.
     const all: { text: string; at: number }[] = []
-    if (HEB.test(typed)) {
-      let at = 0
-      for (const text of typed.split(String.fromCharCode(10))) {
-        all.push({ text: mirrorRtl(text), at })
-        at += text.length + 1
-      }
+    let at = 0
+    for (const text of typed.split(String.fromCharCode(10))) {
+      all.push({ text: mirrorRtl(text), at })
+      at += text.length + 1
     }
-    const lines = all.slice(-Math.max(1, e.props.maxRows - 1))
-    const pos = lines.length ? await read($, caret) : 0
-    const blinkOn = lines.length ? await read($, lit) : false
-    const row = (
-      <Box flexDirection="row" alignItems="center" gap={1}>
-        {e.surface === 'desktop' ? (
-          // On the desktop the button gets a tinted box, like the usage pills beside it.
-          <Box backgroundColor={value ? PILL_ON : PILL_OFF} paddingX="sm" paddingY="xs">
-            {button}
-          </Box>
-        ) : (
-          button
-        )}
-        {below}
-      </Box>
-    )
-    if (lines.length === 0) return row
-    // The draft as it will read, flush right, above the toggle row.
+    const lines = all.slice(-Math.max(1, e.props.maxRows))
+    const pos = await read($, caret)
+    const blinkOn = await read($, lit)
+    // The draft as it will read, flush right, the mark at the left of its top row.
     return (
       <Box flexDirection="column">
-        {lines.map((l, i) => {
-          const k = pos - l.at
-          if (k < 0 || k > l.text.length) return <Text key={`d${i}`} dir="rtl">{l.text === '' ? ' ' : l.text}</Text>
-          // The caret: a thin bar in a cell of its own between the characters, a
-          // space while it blinks off so the text never moves.
-          return (
-            <Text key={`d${i}`} dir="rtl">
-              {l.text.slice(0, k)}
-              <Text key={`d${i}c`} color="text">{blinkOn ? String.fromCharCode(0x2502) : ' '}</Text>
-              {l.text.slice(k)}
-            </Text>
-          )
-        })}
-        {row}
+        <Box flexDirection="row" gap={1}>
+          {mark}
+          <Box flexDirection="column" flexGrow={1}>
+            {lines.map((l, i) => {
+              const k = pos - l.at
+              if (k < 0 || k > l.text.length) return <Text key={`d${i}`} dir="rtl">{l.text === '' ? ' ' : l.text}</Text>
+              // The caret: a thin bar in a cell of its own between the characters, a
+              // space while it blinks off so the text never moves.
+              return (
+                <Text key={`d${i}`} dir="rtl">
+                  {l.text.slice(0, k)}
+                  <Text key={`d${i}c`} color="text">{blinkOn ? String.fromCharCode(0x2502) : ' '}</Text>
+                  {l.text.slice(k)}
+                </Text>
+              )
+            })}
+          </Box>
+        </Box>
+        {below}
       </Box>
     )
   }).catch(($, e, next) => next(e))
